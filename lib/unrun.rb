@@ -1,73 +1,81 @@
 require "coverage.so"
 require "colored"
-require "rugged"
 
 class Unrun
-  def self.start
-    Coverage.start
+  class << self
+    def start
+      Coverage.start
 
-    if block_given?
-      yield
-      report
-    end
-  end
-
-  def self.report
-    files_to_coverage_info = Coverage.result
-    repository = Rugged::Repository.discover(".")
-
-    # get the diff - equivalent to git diff HEAD
-    diff = repository.head.target.tree.diff(repository.index)
-    text_diff = diff.patch
-
-    files_and_ranges = {}
-
-    current_file = nil
-    current_range = []
-
-    text_diff.split("\n").each do |line|
-      if line =~ /diff --git a\/(.*) b\/(.*)/
-        file = $2
-        current_file = File.expand_path(file)
-      elsif line =~ /^@@ \-.* \+(\d+)\,(\d+) @@/
-        current_range = [$1.to_i, $2.to_i]
-
-        files_and_ranges[current_file] ||= []
-        files_and_ranges[current_file] << current_range
+      if block_given?
+        yield
+        report
       end
     end
 
-    files_and_ranges.each do |file, ranges|
-      # puts "files_to_coverage_info: #{files_to_coverage_info}"
-      res = files_to_coverage_info[file]
+    def report
+      files_to_coverage_info = Coverage.result
+      text_diff = `git diff HEAD`.chomp
 
-      if !res
-        puts "file: #{file} not covered!".red
-        next
-      end
+      files_and_ranges = {}
 
-      contents = File.read(file)
-      lines = contents.split("\n")
+      current_file = nil
+      current_range = []
 
-      ranges.each do |range|
-        start = range.first
-        last = range.last
+      text_diff.split("\n").each do |line|
+        if line =~ /diff --git a\/(.*) b\/(.*)/
+          file = $2.strip
+          puts "file is: #{file}"
 
-        start = start - 1
-        last = last - 1
-
-        start.upto(last) do |lineno|
-          line = lines[lineno]
-          coverage_info = files_to_coverage_info[file][lineno]
-          line = if coverage_info == 1
-            line.green
-          elsif coverage_info == 0
-            line.black_on_red
+          if file =~ /\.(rb|rake)$/
+            current_file = File.expand_path(file)
           else
-            line.yellow
+            current_file = nil
           end
+        elsif line =~ /^@@ \-.* \+(\d+)\,(\d+) @@/
+          puts "line: #{line}, current_file: #{current_file}"
+          next if !current_file
+          current_range = [$1.to_i, $1.to_i + $2.to_i]
 
-          puts "%3d %s" % [lineno, line]
+          files_and_ranges[current_file] ||= []
+          files_and_ranges[current_file] << current_range
+        end
+      end
+
+      files_and_ranges.each do |file, ranges|
+        contents = File.read(file)
+        lines = contents.split("\n")
+
+        ranges.each do |range|
+          start = range.first
+          last = range.last
+
+          start = start - 2
+          last = last - 2
+
+          start.upto(last) do |lineno|
+            line = lines[lineno]
+
+            if !line
+              puts "NO LINE".red
+              next
+            end
+
+            if files_to_coverage_info[file]
+              coverage_info = files_to_coverage_info[file][lineno]
+            else
+              coverage_info = 0
+            end
+
+            line = if coverage_info == 1
+              line.green
+            elsif coverage_info == 0
+              line.black_on_red
+            else
+              line.yellow
+            end
+
+            puts "%3d %s" % [lineno, line]
+          end
         end
       end
     end
